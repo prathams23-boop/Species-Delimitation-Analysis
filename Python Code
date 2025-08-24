@@ -1,0 +1,365 @@
+import pandas as pd #For handling the excel sheets containing distance data (generated via MEGA12)
+import numpy as np #For statistics
+import matplotlib.pyplot as plt #Plots
+import seaborn as sns #plots
+from scipy import stats #Not used but imported
+
+# Function to read Excel distance matrix (lower triangular)
+def read_excel_distance_matrix(file_path, sheet_name=0):
+    """
+    Read lower triangular distance matrix from Excel file
+    """
+    df = pd.read_excel(file_path, sheet_name=sheet_name, index_col=0) #Using first column as row labels
+    
+    # Fill NaN values with 0 initially
+    df = df.fillna(0)
+    
+    # Convert lower triangular matrix to symmetric matrix
+    for i in range(len(df.index)):
+        for j in range(len(df.columns)):
+            if i != j:  # Skip diagonal
+                if df.iloc[i, j] == 0 and df.iloc[j, i] != 0:
+                    df.iloc[i, j] = df.iloc[j, i]
+                elif df.iloc[j, i] == 0 and df.iloc[i, j] != 0:
+                    df.iloc[j, i] = df.iloc[i, j]
+    
+    return df #The fully symmetric dataframe is now ready
+
+# Ctaegorizing sequences based on our naming convention
+def categorize_sequences(sequence_names):
+    """
+    Categorizing sequences based on our naming convention
+    """
+    #Dictionary with empty lists to hold different categories of sequences
+    categories = {
+        'BA_NCBI': [], # BA seqeunces from NCBI (since BR is not available on NCBI)
+        'BA_own': [],  
+        'BR_own': []
+    }
+    
+    for name in sequence_names: # sorting sequences from the file into proper categories
+        name_str = str(name)
+        if 'BA_matK_Cleaned_Consensus' in name_str or 'BA_rbcL_Cleaned_Consensus' in name_str:
+            categories['BA_own'].append(name)
+        elif 'BR_matK_Cleaned_Consensus' in name_str or 'BR_rbcL_Cleaned_Consensus' in name_str:
+            categories['BR_own'].append(name)
+        elif '_BA_' in name_str:
+            categories['BA_NCBI'].append(name)
+        else:
+            # Handle any other patterns 
+            categories['BA_NCBI'].append(name)  
+    
+    return categories
+
+# Function to extract distances between our sequences and NCBI sequences
+# This is the core analysis function
+def extract_target_distances(distance_matrix, gene_name='Gene'):
+    """
+    Extracting distances between our BA/BR sequences and NCBI BA sequences
+    """
+    sequence_names = distance_matrix.index.tolist()
+    categories = categorize_sequences(sequence_names)
+    
+    print(f"\n{gene_name} Sequence Categorization")
+    print(f"BA NCBI sequences: {len(categories['BA_NCBI'])}")
+    print(f"BA own sequences: {len(categories['BA_own'])}")
+    print(f"BR own sequences: {len(categories['BR_own'])}")
+    
+    # Extract distances
+    # 3 empty lists to store the specific types of pairwise distances
+    ba_own_to_ncbi = []
+    br_own_to_ncbi = []
+    ba_own_to_br_own = []
+    
+    # BA own sequences vs NCBI BA sequences
+    for ba_own in categories['BA_own']:
+        for ba_ncbi in categories['BA_NCBI']:
+            if ba_own != ba_ncbi:
+                distance = distance_matrix.loc[ba_own, ba_ncbi]
+                if distance > 0: #Ignores complete matches since we dont need them for comparision
+                    ba_own_to_ncbi.append(distance)
+    
+    # BR own sequences vs NCBI BA sequences
+    for br_own in categories['BR_own']:
+        for ba_ncbi in categories['BA_NCBI']:
+            distance = distance_matrix.loc[br_own, ba_ncbi]
+            if distance > 0: #Ignores complete matches since we dont need them for comparision
+                br_own_to_ncbi.append(distance)
+    
+    # BA own vs BR own 
+    for ba_own in categories['BA_own']:
+        for br_own in categories['BR_own']:
+            distance = distance_matrix.loc[ba_own, br_own]
+            if distance > 0: #Ignores complete matches since we dont need them for comparision
+                ba_own_to_br_own.append(distance)
+    
+    # NCBI BA sequences among themselves (reference distribution)
+    ncbi_internal = []
+    for i, seq1 in enumerate(categories['BA_NCBI']):
+        for j, seq2 in enumerate(categories['BA_NCBI']):
+            if i < j:  # Avoid duplicates
+                distance = distance_matrix.loc[seq1, seq2]
+                if distance > 0: #Ignores complete matches since we dont need them for comparision
+                    ncbi_internal.append(distance)
+
+    # Converting each list to a NumPy array
+    
+    return {
+        'ba_own_to_ncbi': np.array(ba_own_to_ncbi),
+        'br_own_to_ncbi': np.array(br_own_to_ncbi),
+        'ba_own_to_br_own': np.array(ba_own_to_br_own),
+        'ncbi_internal': np.array(ncbi_internal),
+        'categories': categories
+    }
+
+# Main visualization function for species delineation
+# Here, we will use the functions we generated above
+def analyze_species_delineation(matk_excel_file, rbcl_excel_file, matk_sheet=0, rbcl_sheet=0):
+    """
+    Analyze species delineation between BA and BR using our sequences
+    """
+    try:
+        # Read distance matrices
+       
+        matk_matrix = read_excel_distance_matrix(matk_excel_file, matk_sheet)
+        rbcl_matrix = read_excel_distance_matrix(rbcl_excel_file, rbcl_sheet)
+        
+        print(f"matK matrix shape: {matk_matrix.shape}")
+        print(f"rbcL matrix shape: {rbcl_matrix.shape}")
+        
+        # Extracting the relevant inter and intraspecific distance for each gene
+        matk_distances = extract_target_distances(matk_matrix, 'matK')
+        rbcl_distances = extract_target_distances(rbcl_matrix, 'rbcL')
+        
+        # Create comprehensive visualization
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Species Delineation Analysis: BA vs BR', fontsize=16, fontweight='bold')
+        
+        # matK analysis
+        plot_gene_analysis(axes[0, :], matk_distances, 'matK', 'green')
+        
+        # rbcL analysis
+        plot_gene_analysis(axes[1, :], rbcl_distances, 'rbcL', 'blue')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Print detailed statistics
+        print_detailed_statistics(matk_distances, rbcl_distances)
+        
+        # Species delineation conclusion
+        print_species_conclusion(matk_distances, rbcl_distances)
+        
+        return {
+            'matk_distances': matk_distances,
+            'rbcl_distances': rbcl_distances,
+            'matk_matrix': matk_matrix,
+            'rbcl_matrix': rbcl_matrix
+        }
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
+
+
+def plot_gene_analysis(axes, distances, gene_name, color):
+    """
+    Use histogram + swarmplot for species comparison.
+    """
+
+
+    color_map = {
+        'default': {
+            'internal': '#1f77b4',     # Blue
+            'ba_vs_ncbi': '#ff7f0e',   # Orange
+            'br_vs_ncbi': '#2ca02c',   # Green
+            'ba_vs_br': '#d62728'      # Red
+        }
+    }
+    colors = color_map['default']
+
+    # Build data for plotting
+    plot_data = []
+    plot_labels = []
+    plot_colors = []
+
+    if len(distances['ncbi_internal']) > 0:
+        plot_data += list(distances['ncbi_internal'])
+        plot_labels += ['NCBI BA\n(internal)'] * len(distances['ncbi_internal'])
+        plot_colors.append(colors['internal'])
+
+    if len(distances['ba_own_to_ncbi']) > 0:
+        plot_data += list(distances['ba_own_to_ncbi'])
+        plot_labels += ['Generated BA Barcode\nvs NCBI BA'] * len(distances['ba_own_to_ncbi'])
+        plot_colors.append(colors['ba_vs_ncbi'])
+
+    if len(distances['br_own_to_ncbi']) > 0:
+        plot_data += list(distances['br_own_to_ncbi'])
+        plot_labels += ['Generated BR Barcode\nvs NCBI BA'] * len(distances['br_own_to_ncbi'])
+        plot_colors.append(colors['br_vs_ncbi'])
+
+    if len(distances['ba_own_to_br_own']) > 0:
+        plot_data += list(distances['ba_own_to_br_own'])
+        plot_labels += ['Generated BA Barcode\nvs Generated BR Barcode'] * len(distances['ba_own_to_br_own'])
+        plot_colors.append(colors['ba_vs_br'])
+
+    df = pd.DataFrame({'Category': plot_labels, 'Distance': plot_data})
+
+    # Histogram
+    hist_data = []
+    hist_labels = []
+    hist_colors = []
+
+    if len(distances['ncbi_internal']) > 0:
+        hist_data.append(distances['ncbi_internal'])
+        hist_labels.append('NCBI BA\n(internal)')
+        hist_colors.append(colors['internal'])
+
+    if len(distances['ba_own_to_ncbi']) > 0:
+        hist_data.append(distances['ba_own_to_ncbi'])
+        hist_labels.append('Generated BA Barcode\nvs NCBI BA')
+        hist_colors.append(colors['ba_vs_ncbi'])
+
+    if len(distances['br_own_to_ncbi']) > 0:
+        hist_data.append(distances['br_own_to_ncbi'])
+        hist_labels.append('Generated BR Barcode\nvs NCBI BA')
+        hist_colors.append(colors['br_vs_ncbi'])
+
+    if len(distances['ba_own_to_br_own']) > 0:
+        hist_data.append(distances['ba_own_to_br_own'])
+        hist_labels.append('Generated BA Barcode\nvs Generated BR Barcode')
+        hist_colors.append(colors['ba_vs_br'])
+
+    axes[0].hist(hist_data, bins=15, alpha=0.75, color=hist_colors, label=hist_labels, edgecolor='black')
+    axes[0].set_title(f'{gene_name}: Distance Distributions', fontsize=14, fontweight='bold')
+    axes[0].set_xlabel('Genetic Distance', fontsize=12)
+    axes[0].set_ylabel('Frequency', fontsize=12)
+    axes[0].legend(fontsize=10)
+    axes[0].grid(True, alpha=0.3)
+
+    # Swarmplot
+    sns.stripplot(
+    data=df,
+    x='Category',
+    y='Distance',
+    hue='Category',
+    dodge=False,
+    palette='deep',
+    ax=axes[1],
+    size=6,
+    jitter=True,
+    legend=False
+)
+
+    axes[1].set_title(f'{gene_name}: Pairwise Distance Points', fontsize=14, fontweight='bold')
+    axes[1].set_ylabel('Genetic Distance', fontsize=12)
+    axes[1].tick_params(axis='x', rotation=45, labelsize=10)
+    axes[1].grid(True, alpha=0.3)
+
+    # Threshold line
+    # These thresholds have been acquired from literature (will be cited in further reports)
+    if gene_name == 'matK':
+        axes[1].axhline(0.02, color='black', linestyle='--', linewidth=1.5, label='2% Threshold')
+    elif gene_name == 'rbcL':
+        axes[1].axhline(0.015, color='black', linestyle='--', linewidth=1.5, label='1.5% Threshold')
+    axes[1].legend(fontsize=9)
+
+
+
+        
+
+
+def print_detailed_statistics(matk_distances, rbcl_distances):
+    """
+    Print detailed statistics for both genes 
+    """
+    print("\n")
+    print("Detailed Statistics")
+   
+    
+    for gene_name, distances in [('matK', matk_distances), ('rbcL', rbcl_distances)]:
+        print(f"\n{gene_name} Results:")
+       
+        
+        for category, values in distances.items():
+            if len(values) > 0 and category != 'categories':
+                category_name = category.replace('_', ' ').title()
+                print(f"{category_name}:")
+                print(f"  Count: {len(values)}")
+                print(f"  Mean: {np.mean(values):.4f}")
+                print(f"  Std: {np.std(values):.4f}")
+                print(f"  Range: {np.min(values):.4f} - {np.max(values):.4f}")
+                print()
+
+def print_species_conclusion(matk_distances, rbcl_distances):
+    """
+    Print species delineation conclusion
+    """
+    print("\n")
+    print("Species Delineation Analysis")
+    
+    
+    # Key comparisons for species delineation
+    conclusions = []
+    
+    for gene_name, distances in [('matK', matk_distances), ('rbcL', rbcl_distances)]:
+        print(f"\n{gene_name} Analysis:")
+       
+        
+        # Compare BR vs NCBI BA with reference (NCBI internal variation)
+        if len(distances['br_own_to_ncbi']) > 0 and len(distances['ncbi_internal']) > 0:
+            br_mean = np.mean(distances['br_own_to_ncbi'])
+            ncbi_mean = np.mean(distances['ncbi_internal'])
+            ncbi_max = np.max(distances['ncbi_internal'])
+            
+            print(f"Generated BR Barcode vs NCBI BA: Mean = {br_mean:.4f}")
+            print(f"NCBI BA internal variation: Mean = {ncbi_mean:.4f}, Max = {ncbi_max:.4f}")
+            
+            if br_mean <= ncbi_max:
+                print("BR distances fall within BA species variation")
+                conclusions.append(f"{gene_name}: BR likely same species as BA")
+            else:
+                print("BR distances exceed BA species variation")
+                conclusions.append(f"{gene_name}: BR likely different species from BA")
+        
+        # Direct BA vs BR comparison
+        if len(distances['ba_own_to_br_own']) > 0:
+            ba_br_distance = np.mean(distances['ba_own_to_br_own'])
+            print(f"Direct Generated BA Barcode vs Generated BR Barcode distance: {ba_br_distance:.4f}")
+            
+            # Compare with typical species thresholds
+            if gene_name == 'matK' and ba_br_distance > 0.02:
+                print("→ BA-BR distance exceeds typical matK species threshold (2%)")
+            elif gene_name == 'rbcL' and ba_br_distance > 0.015:
+                print("→ BA-BR distance exceeds typical rbcL species threshold (1.5%)")
+            else:
+                print("→ BA-BR distance within typical species variation")
+    
+    # Final conclusion
+    print(f"\n")
+    print("Final Recommendation:")
+    
+    
+    if conclusions:
+        same_species_count = sum(1 for c in conclusions if 'same species' in c)
+        different_species_count = sum(1 for c in conclusions if 'different species' in c)
+        
+        if same_species_count > different_species_count:
+            print("Evidence suggests BA and BR are THE SAME SPECIES")
+            print("Recommend treating BR as synonym of BA")
+        elif different_species_count > same_species_count:
+            print("Evidence suggests BA and BR are DIFFERENT SPECIES")
+            print("Recommend maintaining separate species status")
+        else:
+            print("Evidence is INCONCLUSIVE")
+            print("Additional markers or samples needed")
+    else:
+        print("Insufficient data for species delineation")
+
+
+
+
+
+# Usage:
+# results = analyze_species_delineation('matK distance file', 'rbcL distance file')
